@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "timestamps",
+  "version": "1.0.0",
+  "description": "Live date + time stamps on every Claude Code message. Automatic, cross-platform, zero-dependency.",
+  "author": {
+    "name": "Prof. Llewellyn E. van Zyl (Ph.D)",
+    "url": "https://www.llewellynvanzyl.com"
+  },
+  "homepage": "https://github.com/llewellynvz/claude-code-timestamps",
+  "repository": "https://github.com/llewellynvz/claude-code-timestamps",
+  "license": "MIT",
+  "keywords": [
+    "timestamps",
+    "time",
+    "date",
+    "hooks",
+    "transcript",
+    "productivity",
+    "logging"
+  ]
+}

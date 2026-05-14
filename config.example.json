@@ -1,0 +1,25 @@
+{
+  "_comment": "Copy this file to your plugin data directory to customise the timestamp lines. See README.md > Configuration for the exact path on your machine and what every field does. Every field is optional; anything you omit falls back to the built-in default shown here.",
+
+  "enabled": true,
+
+  "timeFormat": "24h",
+  "showSeconds": true,
+
+  "dateMode": "always",
+  "dateOnStopLine": false,
+
+  "showElapsed": true,
+
+  "prefix": "⏱",
+  "separator": " · ",
+  "indent": 0,
+  "gapBeforePrompt": 1,
+  "gapBeforeStop": 0,
+  "color": false,
+
+  "labels": {
+    "user": "you",
+    "assistant": "Claude"
+  }
+}

@@ -1,0 +1,28 @@
+# Local evaluation copy of the upstream project (not part of this plugin)
+_upstream/
+
+# claude-flow background daemon runtime artifacts (machine-local, not source)
+.claude-flow/
+
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Local plugin state / scratch produced while testing the hooks
+.tmp/
+*.local.json
+test/.work/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor noise
+.idea/
+.vscode/
+*.swp
+ruvector.db
+claude.md   
