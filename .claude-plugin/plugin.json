@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "timestamps",
-  "version": "1.0.0",
-  "description": "Live date + time stamps on every Claude Code message. Automatic, cross-platform, zero-dependency.",
+  "version": "2.0.0",
+  "description": "A clean, on-demand timestamped timeline of your Claude Code conversation, plus an optional live status-bar clock. Cross-platform, zero-dependency.",
   "author": {
     "name": "Prof. Llewellyn E. van Zyl (Ph.D)",
     "url": "https://www.llewellynvanzyl.com"
@@ -14,9 +14,8 @@
     "timestamps",
     "time",
     "date",
-    "hooks",
     "transcript",
-    "productivity",
-    "logging"
+    "timeline",
+    "productivity"
   ]
 }

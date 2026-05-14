@@ -1,14 +1,24 @@
 'use strict';
 
 /**
- * log.js — retrospective message timeline (the /timestamps:log skill).
+ * log.js — the /timestamps:log conversation timeline (the plugin's core feature).
  *
- * Prints a clean, date-grouped timeline of recent messages in the current
- * project's transcript, each with a full HH:MM:SS timestamp.
+ * Finds the current project's transcript, parses it, and prints a clean,
+ * date-grouped timeline where every message carries a "[HH:MM:SS] Name:" header:
  *
- * This is the Node, cross-platform replacement for the upstream project's
- * python3 `parse-transcript.py` — same idea, no Python dependency, works on
- * Windows out of the box, and adds seconds + a date header to every entry.
+ *     --- Message Timeline ---
+ *
+ *     Thu 14 May 2026
+ *
+ *     [14:51:52] Llewellyn:
+ *     what is the time?
+ *
+ *     [14:51:55] Claude:
+ *     It's 2:51 PM.
+ *
+ *     Showing 2 of 48 messages.
+ *
+ * Pure Node, cross-platform, zero dependencies.
  *
  * Usage:
  *   node log.js                 # last 20 messages from the current project
@@ -36,6 +46,8 @@ function out(line) {
 
 async function main() {
   const cfg = config.load();
+  const userLabel = config.resolveUserLabel(cfg);
+  const assistantLabel = cfg.labels.assistant;
 
   // Parse args: a bare integer is the count; anything else is a path.
   let count = DEFAULT_COUNT;
@@ -63,7 +75,11 @@ async function main() {
     return;
   }
 
-  const messages = await transcript.readMessages(validated);
+  const messages = await transcript.readMessages(
+    validated,
+    cfg.previewLength,
+    cfg.includeToolCalls
+  );
   if (!messages.length) {
     out('Transcript found, but it has no displayable messages yet.');
     return;
@@ -77,26 +93,35 @@ async function main() {
   let lastDay = null;
   for (const m of tail) {
     const d = parseIso(m.timestamp);
-    const dayHeader = d ? render.formatDate(d) : 'Unknown date';
-    if (dayHeader !== lastDay) {
-      out('');
-      out(dayHeader);
-      lastDay = dayHeader;
+
+    // Date header when the day changes (if enabled).
+    if (cfg.dateHeaders) {
+      const dayHeader = d ? render.formatDate(d) : 'Unknown date';
+      if (dayHeader !== lastDay) {
+        out('');
+        out(dayHeader);
+        lastDay = dayHeader;
+      }
     }
-    const time = d ? render.formatTime(d, cfg) : '--:--:--';
-    const label = m.role === 'user' ? cfg.labels.user : cfg.labels.assistant;
-    out('  ' + time.padEnd(11) + label.padEnd(8) + ' ' + m.preview);
+
+    const clock = d ? render.formatClock(d, cfg) : '[--:--:--]';
+    const label = m.role === 'user' ? userLabel : assistantLabel;
+
+    // Blank line between entries, then "[HH:MM:SS] Name:" then the message.
+    out('');
+    out(clock + ' ' + label + ':');
+    out(m.preview);
   }
 
   out('');
   out('Showing ' + tail.length + ' of ' + messages.length + ' messages.');
   if (messages.length > tail.length) {
-    out('Tip: /timestamps:log <number> shows more (e.g. /timestamps:log 50).');
+    out('Run /timestamps:log ' + Math.min(messages.length, MAX_COUNT) + ' to see the full conversation.');
   }
 }
 
-// User-invoked, so it is fine to finish quietly on error rather than dumping a
-// stack trace into the skill output. Always exits 0.
+// User-invoked, so it finishes quietly on error rather than dumping a stack
+// trace into the skill output. Always exits 0.
 Promise.resolve()
   .then(main)
   .catch(function (e) {

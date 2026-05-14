@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * paths.js — resolves a writable directory for plugin state.
+ * paths.js — resolves the directory that holds the optional config.json.
  *
  * Order of preference:
  *   1. ${CLAUDE_PLUGIN_DATA}        — the official persistent plugin data dir
@@ -10,8 +10,7 @@
  *                                     (e.g. when loaded via --plugin-dir during dev)
  *
  * Every function here is best-effort and never throws. If no directory can be
- * created, callers receive `null` and silently skip state — the plugin still
- * prints timestamps, it just cannot show "elapsed" time for that turn.
+ * found, callers receive `null` and simply fall back to built-in defaults.
  */
 
 const fs = require('fs');
@@ -22,7 +21,6 @@ const path = require('path');
 function ensureDir(dir) {
   try {
     fs.mkdirSync(dir, { recursive: true });
-    // Confirm it is actually a directory we can see.
     return fs.statSync(dir).isDirectory();
   } catch (_) {
     return false;
@@ -31,8 +29,8 @@ function ensureDir(dir) {
 
 /**
  * Resolve the base data directory. Returns an absolute path string, or `null`
- * if nothing writable could be found. Result is NOT cached — cheap enough to
- * recompute, and avoids stale state across the short-lived hook process.
+ * if nothing usable could be found. Not cached — cheap to recompute and avoids
+ * stale state across short-lived script processes.
  */
 function dataDir() {
   const candidates = [];
@@ -40,7 +38,6 @@ function dataDir() {
   if (process.env.CLAUDE_PLUGIN_DATA && process.env.CLAUDE_PLUGIN_DATA.trim()) {
     candidates.push(process.env.CLAUDE_PLUGIN_DATA.trim());
   }
-  // Fallback: a stable, per-user temp location.
   try {
     candidates.push(path.join(os.tmpdir(), 'claude-timestamps'));
   } catch (_) {
@@ -53,15 +50,4 @@ function dataDir() {
   return null;
 }
 
-/**
- * Resolve the sub-directory that holds per-session state files.
- * Returns an absolute path string, or `null` if unavailable.
- */
-function stateDir() {
-  const base = dataDir();
-  if (!base) return null;
-  const dir = path.join(base, 'state');
-  return ensureDir(dir) ? dir : null;
-}
-
-module.exports = { dataDir, stateDir, ensureDir };
+module.exports = { dataDir, ensureDir };

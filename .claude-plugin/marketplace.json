@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "claude-code-timestamps",
-  "description": "Marketplace for the timestamps plugin: live date + time stamps for Claude Code.",
+  "description": "Marketplace for the timestamps plugin: a clean, on-demand conversation timeline for Claude Code.",
   "owner": {
     "name": "Prof. Llewellyn E. van Zyl (Ph.D)"
   },
@@ -9,7 +9,7 @@
     {
       "name": "timestamps",
       "source": "./",
-      "description": "Live date + time stamps on every Claude Code message. Automatic, cross-platform, zero-dependency.",
+      "description": "A clean, on-demand timestamped timeline of your Claude Code conversation, plus an optional live status-bar clock.",
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/llewellynvz/claude-code-timestamps",
@@ -18,7 +18,7 @@
         "timestamps",
         "time",
         "date",
-        "hooks"
+        "timeline"
       ]
     }
   ]

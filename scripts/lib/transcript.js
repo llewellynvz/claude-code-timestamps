@@ -100,35 +100,62 @@ function validateTranscriptPath(p) {
   return resolved;
 }
 
-/** Extract a short text preview from one transcript entry. */
+/**
+ * Extract a preview from one transcript entry.
+ * @returns {{preview: string, kind: 'text'|'tool'|'empty'}}
+ *   - 'text'  : a real conversational message (user prompt / assistant reply)
+ *   - 'tool'  : the entry is only a tool call, no conversational text
+ *   - 'empty' : nothing displayable
+ * Text is preferred over a tool call regardless of block order, so an
+ * assistant turn that both calls a tool and writes a reply is treated as text.
+ */
 function extractPreview(entry) {
   const msg = entry && entry.message ? entry.message : {};
   const content = msg.content;
-  if (typeof content === 'string') return content;
+
+  if (typeof content === 'string') {
+    return { preview: content, kind: content.trim() ? 'text' : 'empty' };
+  }
+
   if (Array.isArray(content)) {
+    let toolName = null;
     for (const block of content) {
       if (!block || typeof block !== 'object') continue;
-      if (block.type === 'text') return block.text || '';
-      if (block.type === 'tool_use') return '[tool: ' + (block.name || '?') + ']';
+      if (block.type === 'text' && block.text && block.text.trim()) {
+        return { preview: block.text, kind: 'text' }; // text wins, any position
+      }
+      if (block.type === 'tool_use' && toolName === null) {
+        toolName = block.name || '?';
+      }
+    }
+    if (toolName !== null) {
+      return { preview: '[tool: ' + toolName + ']', kind: 'tool' };
     }
   }
-  return '';
+
+  return { preview: '', kind: 'empty' };
 }
 
 /** Collapse whitespace and truncate to `maxLen` characters. */
 function truncate(text, maxLen) {
-  const limit = maxLen || 80;
+  const limit = maxLen || 200;
   const collapsed = String(text).split(/\s+/).join(' ').trim();
   if (collapsed.length > limit) return collapsed.slice(0, limit - 3) + '...';
-  return collapsed || '(no text content)';
+  return collapsed;
 }
 
 /**
  * Stream the transcript and resolve to an ordered array of
  * {timestamp, role, preview}. Streaming (not readFileSync) keeps memory flat
  * on very large transcripts. Never rejects — returns whatever parsed cleanly.
+ *
+ * @param {string}  transcriptPath
+ * @param {number} [previewLen]        — max chars per message preview
+ * @param {boolean} [includeToolCalls] — if false (default), entries that are
+ *                                       only a tool call are skipped, leaving
+ *                                       a clean conversational timeline.
  */
-function readMessages(transcriptPath, previewLen) {
+function readMessages(transcriptPath, previewLen, includeToolCalls) {
   return new Promise((resolve) => {
     const messages = [];
     let stream;
@@ -150,12 +177,15 @@ function readMessages(transcriptPath, previewLen) {
         return; // skip malformed line
       }
       if (!entry || (entry.type !== 'user' && entry.type !== 'assistant')) return;
-      const preview = truncate(extractPreview(entry), previewLen);
-      if (preview === '(no text content)') return; // skip tool-only entries
+
+      const ex = extractPreview(entry);
+      if (ex.kind === 'empty') return; // nothing displayable
+      if (ex.kind === 'tool' && !includeToolCalls) return; // skip tool-only noise
+
       messages.push({
         timestamp: entry.timestamp || '',
         role: entry.type,
-        preview,
+        preview: truncate(ex.preview, previewLen),
       });
     });
     rl.on('error', () => resolve(messages));

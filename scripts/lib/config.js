@@ -13,48 +13,35 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { dataDir } = require('./paths');
 
 /** Built-in defaults. Every supported key is listed here exactly once. */
 const DEFAULTS = Object.freeze({
-  // Master switch. When false, the hooks run but print nothing.
-  enabled: true,
-
-  // "24h" -> 14:23:01   |   "12h" -> 2:23:01 pm
+  // "24h" -> 14:51:52   |   "12h" -> 2:51:52 pm
   timeFormat: '24h',
   // Include ":SS" in the time.
   showSeconds: true,
 
-  // "always" -> show the date on every prompt line
-  // "never"  -> never show the date
-  dateMode: 'always',
-  // Also show the date on the "Claude finished" line (off by default — the
-  // prompt line above it already carries the date for that exchange).
-  dateOnStopLine: false,
+  // Names shown in the timeline. labels.user may be the literal string "auto",
+  // which resolves to the operating-system username at runtime.
+  labels: Object.freeze({ user: 'auto', assistant: 'Claude' }),
 
-  // Show "· 46s" elapsed time on the "Claude finished" line.
-  showElapsed: true,
+  // /timestamps:log — group entries under a "Thu 14 May 2026" date header.
+  dateHeaders: true,
+  // /timestamps:log — max characters of message text shown per entry.
+  previewLength: 200,
+  // /timestamps:log — include tool-call entries ("[tool: Write]"). Off by
+  // default so the timeline stays a clean conversational view.
+  includeToolCalls: false,
 
-  // Leading glyph for each line. Set to "" for none.
+  // extras/statusline.js — leading glyph and whether to append the date.
   prefix: '⏱', // ⏱
-  // Separator between fields.
-  separator: ' · ', // " · "
-  // Spaces of left indentation.
-  indent: 0,
-  // Blank lines printed BEFORE the prompt line (separates exchanges).
-  gapBeforePrompt: 1,
-  // Blank lines printed BEFORE the "Claude finished" line (same exchange).
-  gapBeforeStop: 0,
-  // Wrap lines in ANSI "dim". Off by default for maximum terminal safety.
-  color: false,
-
-  // Display labels for each side of the conversation.
-  labels: Object.freeze({ user: 'you', assistant: 'Claude' }),
+  statuslineShowDate: true,
 });
 
 const VALID_TIME_FORMATS = ['24h', '12h'];
-const VALID_DATE_MODES = ['always', 'never'];
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -76,54 +63,62 @@ function intInRange(v, min, max, def) {
  */
 function normalize(raw) {
   const cfg = {
-    enabled: DEFAULTS.enabled,
     timeFormat: DEFAULTS.timeFormat,
     showSeconds: DEFAULTS.showSeconds,
-    dateMode: DEFAULTS.dateMode,
-    dateOnStopLine: DEFAULTS.dateOnStopLine,
-    showElapsed: DEFAULTS.showElapsed,
-    prefix: DEFAULTS.prefix,
-    separator: DEFAULTS.separator,
-    indent: DEFAULTS.indent,
-    gapBeforePrompt: DEFAULTS.gapBeforePrompt,
-    gapBeforeStop: DEFAULTS.gapBeforeStop,
-    color: DEFAULTS.color,
     labels: { user: DEFAULTS.labels.user, assistant: DEFAULTS.labels.assistant },
+    dateHeaders: DEFAULTS.dateHeaders,
+    previewLength: DEFAULTS.previewLength,
+    includeToolCalls: DEFAULTS.includeToolCalls,
+    prefix: DEFAULTS.prefix,
+    statuslineShowDate: DEFAULTS.statuslineShowDate,
   };
 
   if (!isPlainObject(raw)) return cfg;
-
-  if (typeof raw.enabled === 'boolean') cfg.enabled = raw.enabled;
 
   if (VALID_TIME_FORMATS.indexOf(raw.timeFormat) !== -1) {
     cfg.timeFormat = raw.timeFormat;
   }
   if (typeof raw.showSeconds === 'boolean') cfg.showSeconds = raw.showSeconds;
 
-  if (VALID_DATE_MODES.indexOf(raw.dateMode) !== -1) cfg.dateMode = raw.dateMode;
-  if (typeof raw.dateOnStopLine === 'boolean') cfg.dateOnStopLine = raw.dateOnStopLine;
-
-  if (typeof raw.showElapsed === 'boolean') cfg.showElapsed = raw.showElapsed;
-
-  if (typeof raw.prefix === 'string') cfg.prefix = raw.prefix;
-  if (typeof raw.separator === 'string' && raw.separator.length > 0) {
-    cfg.separator = raw.separator;
-  }
-  cfg.indent = intInRange(raw.indent, 0, 40, DEFAULTS.indent);
-  cfg.gapBeforePrompt = intInRange(raw.gapBeforePrompt, 0, 5, DEFAULTS.gapBeforePrompt);
-  cfg.gapBeforeStop = intInRange(raw.gapBeforeStop, 0, 5, DEFAULTS.gapBeforeStop);
-  if (typeof raw.color === 'boolean') cfg.color = raw.color;
-
   if (isPlainObject(raw.labels)) {
     if (typeof raw.labels.user === 'string' && raw.labels.user.length > 0) {
       cfg.labels.user = raw.labels.user;
     }
-    if (typeof raw.labels.assistant === 'string' && raw.labels.assistant.length > 0) {
+    if (
+      typeof raw.labels.assistant === 'string' &&
+      raw.labels.assistant.length > 0
+    ) {
       cfg.labels.assistant = raw.labels.assistant;
     }
   }
 
+  if (typeof raw.dateHeaders === 'boolean') cfg.dateHeaders = raw.dateHeaders;
+  cfg.previewLength = intInRange(raw.previewLength, 20, 2000, DEFAULTS.previewLength);
+  if (typeof raw.includeToolCalls === 'boolean') {
+    cfg.includeToolCalls = raw.includeToolCalls;
+  }
+
+  if (typeof raw.prefix === 'string') cfg.prefix = raw.prefix;
+  if (typeof raw.statuslineShowDate === 'boolean') {
+    cfg.statuslineShowDate = raw.statuslineShowDate;
+  }
+
   return cfg;
+}
+
+/**
+ * Resolve the user label. If it is the literal "auto", use the OS username;
+ * if that is unavailable, fall back to "You". Never throws.
+ */
+function resolveUserLabel(cfg) {
+  const label = cfg && cfg.labels ? cfg.labels.user : DEFAULTS.labels.user;
+  if (label !== 'auto') return label;
+  try {
+    const name = os.userInfo().username;
+    return name && name.trim() ? name.trim() : 'You';
+  } catch (_) {
+    return 'You';
+  }
 }
 
 /** Absolute path to the (optional) user config file, or null if no data dir. */
@@ -150,4 +145,4 @@ function load(explicitPath) {
   }
 }
 
-module.exports = { load, normalize, configPath, DEFAULTS };
+module.exports = { load, normalize, resolveUserLabel, configPath, DEFAULTS };

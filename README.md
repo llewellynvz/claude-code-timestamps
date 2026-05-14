@@ -1,53 +1,59 @@
-# ⏱ Timestamps — live date & time stamps for Claude Code
+# ⏱ Timestamps — a clean conversation timeline for Claude Code
 
-**See exactly when every message was sent — automatically, on every interaction, right inside Claude Code.**
+**See exactly when every message in your Claude Code session was sent.**
 
-A zero-dependency, cross-platform Claude Code **plugin**. Once enabled it adds a
-clean timestamp line whenever you send a message and whenever Claude finishes
-replying — including how long the turn took. No command to remember, no
-per-session setup. It just runs.
+A zero-dependency, cross-platform Claude Code **plugin**. It adds a
+`/timestamps:log` command that prints a clean, date-grouped timeline of your
+conversation — every message with a full `[HH:MM:SS]` timestamp — plus an
+optional always-on clock for the status bar.
 
 ```
-⏱ 14:23:01 · Tue 14 May 2026 · you
-  Can you refactor the auth module and add tests?
+--- Message Timeline ---
 
-  …Claude works…
+Thu 14 May 2026
 
-⏱ 14:23:47 · Claude · 46s
+[14:51:52] Llewellyn:
+what is the time?
+
+[14:51:55] Claude:
+It's 2:51 PM, Thursday 14 May 2026.
+
+Showing 2 of 48 messages.
 ```
-
-It also ships a `/timestamps:log` skill for a retrospective, date-grouped
-timeline of the whole conversation.
-
----
 
 ## Why
 
 Claude Code doesn't show timestamps on messages. In a long session you lose
 track of *when* things happened — when you asked something, when a task
-started, how long it took. The data exists in Claude Code's transcript files,
-but it's buried in JSON. This plugin surfaces it, live, as you work.
+started, how long ago a decision was made. The data exists in Claude Code's
+transcript files, but it's buried in JSON. This plugin surfaces it as a clean,
+readable timeline whenever you want it.
 
-> Inspired by [`s-a-s-k-i-a/claude-code-timestamps`](https://github.com/s-a-s-k-i-a/claude-code-timestamps),
-> which provided a manual, Python-based `/timestamps` command. This project
-> rebuilds the idea as an **automatic** plugin: live hooks instead of a manual
-> command, pure Node instead of Python (so it works on Windows out of the box),
-> with seconds, full dates, and per-turn elapsed time.
+### Why on-demand instead of live?
+
+Honest answer: Claude Code's plugin system **cannot** put a clean timestamp on a
+live message. Hooks can't modify message bubbles, and any visible hook output is
+forced through a `⎿ <Event> says:` wrapper that clutters the transcript. Rather
+than ship something noisy, this plugin does the part Claude Code *can* do
+well — a clean, accurate timeline on demand — plus an optional status-bar clock
+for an always-visible current time. See [How it works](#how-it-works) for the
+detail.
+
+> This plugin was inspired by [`s-a-s-k-i-a/claude-code-timestamps`](https://github.com/s-a-s-k-i-a/claude-code-timestamps).
+> It is a ground-up rewrite: pure Node instead of Python (so it works on Windows
+> out of the box), with seconds, full dates, date grouping, and the `[time] Name:`
+> layout.
 
 ## What you get
 
 | Feature | Detail |
 | :------ | :----- |
-| **Live timestamps** | A line when you submit a prompt, and a line when Claude finishes the turn. |
-| **Date + time + seconds** | `⏱ 14:23:01 · Tue 14 May 2026 · you` — local timezone, configurable. |
-| **Per-turn elapsed time** | The "Claude finished" line shows how long the turn took (`· 46s`, `· 2m 13s`). |
-| **Clean separation** | A blank line before each new exchange makes message boundaries easy to scan; configurable. |
-| **`/timestamps:log`** | Retrospective, date-grouped timeline of recent messages from the session transcript. |
+| **`/timestamps:log`** | A clean, date-grouped timeline of recent messages, each with a `[HH:MM:SS] Name:` header. |
+| **Full precision** | Hours, minutes, **and seconds**, plus a date header per day. Local timezone. |
+| **Your name, automatically** | Your messages are labelled with your OS username by default (configurable). |
+| **Optional status-bar clock** | An opt-in live clock for the bottom of the terminal: `⏱ 14:51:55 · Thu 14 May 2026`. |
 | **Zero config** | Works immediately. An optional `config.json` customises everything. |
-| **Self-contained** | Pure Node, no dependencies, no install step. Doesn't touch or interfere with your other hooks, scripts, or settings. |
-| **Optional clock** | An opt-in status-line clock (`extras/statusline.js`) for a live ticking clock at the bottom of the terminal. |
-
----
+| **Self-contained** | Pure Node, no dependencies, no install step, no background processes. Doesn't register hooks, doesn't touch your other settings. |
 
 ## Install
 
@@ -56,20 +62,19 @@ but it's buried in JSON. This plugin surfaces it, live, as you work.
 
 ### Option A — install from GitHub (recommended)
 
-Once this repository is on GitHub (see [Before you publish](#before-you-publish-to-github)),
-anyone can install it in two commands inside Claude Code:
+Inside Claude Code:
 
 ```
 /plugin marketplace add llewellynvz/claude-code-timestamps
 /plugin install timestamps@claude-code-timestamps
 ```
 
-Then restart Claude Code (or run `/reload-plugins`). That's it — timestamps now
-appear automatically in every session.
+Then restart Claude Code (or run `/reload-plugins`). The `/timestamps:log`
+command is now available in every session.
 
 ### Option B — install from a local copy
 
-If you have this repository cloned on disk and just want to use it yourself:
+If you have this repository cloned on disk:
 
 ```
 /plugin marketplace add "/path/to/claude-code-timestamps"
@@ -90,22 +95,11 @@ This loads the plugin for that session only, without installing anything.
 
 ### Verify it's working
 
-- Send any message — you should see the `⏱ … · you` line appear.
-- When Claude finishes replying, you should see the `⏱ … · Claude · …` line.
-- Run `/timestamps:log` to see the retrospective timeline.
+- Run `/timestamps:log` — you should see the timeline.
 - Run `claude plugin validate .` from this folder — it should report
   `Validation passed`.
 
----
-
 ## Usage
-
-### Automatic — nothing to do
-
-The two timestamp lines appear on their own, every turn, for the whole session.
-There is no command to run and nothing to remember. This is the whole point.
-
-### `/timestamps:log` — retrospective timeline
 
 ```
 /timestamps:log         # last 20 messages, with timestamps, grouped by day
@@ -113,22 +107,16 @@ There is no command to run and nothing to remember. This is the whole point.
 /timestamps:log 5       # just the last 5
 ```
 
-Example output:
+Each entry is rendered as:
 
 ```
---- Message Timeline ---
-
-Tue 14 May 2026
-  14:02:09   you      Can you refactor the auth module?
-  14:02:11   Claude   I'll start by reading the current auth implementation...
-  14:05:33   Claude   I've refactored the auth module. Here's what changed...
-  14:31:48   you      Looks good. Now add tests for the token refresh logic.
-  14:32:02   Claude   I'll create tests for the token refresh functionality...
-
-Showing 5 of 48 messages.
+[14:51:52] Llewellyn:
+what is the time?
 ```
 
----
+— a `[HH:MM:SS] Name:` header, the message text below it, and a blank line
+before the next entry. Messages are grouped under a `Thu 14 May 2026` date
+header. Long messages are trimmed to a readable preview length.
 
 ## Configuration
 
@@ -144,8 +132,7 @@ file called `config.json` in the plugin's data directory.
 | Fallback (if the above is unavailable) | `<your OS temp dir>/claude-timestamps/config.json` |
 
 On Windows, `~` is `C:\Users\<you>`. The directory is created automatically the
-first time the plugin runs — if it doesn't exist yet, send one message and it
-will appear.
+first time the plugin runs.
 
 Copy [`config.example.json`](./config.example.json) into that directory as
 `config.json` and edit. **Every field is optional** — anything you leave out
@@ -153,31 +140,17 @@ keeps its default.
 
 | Field | Default | What it does |
 | :---- | :------ | :----------- |
-| `enabled` | `true` | Master switch. `false` keeps the plugin installed but silent. |
-| `timeFormat` | `"24h"` | `"24h"` → `14:23:01`, or `"12h"` → `2:23:01 pm`. |
+| `timeFormat` | `"24h"` | `"24h"` → `[14:51:52]`, or `"12h"` → `[2:51:52 pm]`. |
 | `showSeconds` | `true` | Include `:SS` in the time. |
-| `dateMode` | `"always"` | `"always"` shows the date on every prompt line; `"never"` hides it. |
-| `dateOnStopLine` | `false` | Also show the date on the "Claude finished" line. |
-| `showElapsed` | `true` | Show per-turn elapsed time on the "Claude finished" line. |
-| `prefix` | `"⏱"` | The leading glyph. Set to `""` for none, or any string you like. |
-| `separator` | `" · "` | Text placed between fields. |
-| `indent` | `0` | Spaces of left indentation (0–40). |
-| `gapBeforePrompt` | `1` | Blank lines before the "you" line — the visual gap **between exchanges** (0–5). |
-| `gapBeforeStop` | `0` | Blank lines before the "Claude finished" line — kept tight, since it belongs to the same exchange (0–5). |
-| `color` | `false` | Wrap lines in ANSI "dim". Off by default for maximum terminal compatibility. |
-| `labels.user` | `"you"` | Label for your messages. |
-| `labels.assistant` | `"Claude"` | Label for Claude's messages. |
-
-> **Tip — the spacing controls.** `gapBeforePrompt` and `gapBeforeStop` are how
-> you tune message separation. The defaults (`1` before each new exchange, `0`
-> within an exchange) give a small gap inside a turn and a slightly bigger one
-> between turns, so distinct messages are easy to tell apart at a glance. Bump
-> `gapBeforePrompt` to `2` for even more breathing room.
+| `labels.user` | `"auto"` | Name for your messages. `"auto"` uses your OS username; set any string to override (e.g. `"Llewellyn"`). |
+| `labels.assistant` | `"Claude"` | Name for Claude's messages. |
+| `dateHeaders` | `true` | Group timeline entries under a `Thu 14 May 2026` date header. |
+| `previewLength` | `200` | Max characters of message text shown per entry (20–2000). |
+| `prefix` | `"⏱"` | Leading glyph for the **status-bar clock**. Set to `""` for none. |
+| `statuslineShowDate` | `true` | Whether the **status-bar clock** appends the date. |
 
 Bad or unrecognised values are ignored safely — the plugin falls back to the
 default for that single field and never errors.
-
----
 
 ## Optional: a live clock in the status line
 
@@ -186,11 +159,12 @@ you already have there — so this is shipped as an **opt-in extra** you switch 
 yourself. It gives you a clock that updates every second:
 
 ```
-⏱ 14:23:01 · Tue 14 May 2026 · claude-opus-4-7 · my-project
+⏱ 14:51:55 · Thu 14 May 2026
 ```
 
-Add this to your `~/.claude/settings.json` (adjust the path to where this plugin
-lives — for a marketplace install it's under `~/.claude/plugins/cache/...`):
+Add this to your `~/.claude/settings.json` (point the path at wherever the
+plugin lives — for a marketplace install it's under
+`~/.claude/plugins/cache/...`; `claude plugin list` shows the path):
 
 ```json
 {
@@ -202,100 +176,80 @@ lives — for a marketplace install it's under `~/.claude/plugins/cache/...`):
 }
 ```
 
-It reuses the same `config.json`, so the time format, prefix, separator, and
-colour settings all apply to the clock too.
-
----
+It reuses the same `config.json`, so the time format, seconds, prefix, and
+`statuslineShowDate` settings all apply to the clock.
 
 ## How it works
 
-Claude Code lets plugins register **hooks** — small commands that run on session
-events. This plugin registers two (`hooks/hooks.json`):
-
-- **`UserPromptSubmit`** runs the moment you send a message. It prints the
-  `⏱ … · you` line (a `UserPromptSubmit` hook's plain output is shown in the
-  transcript) and records the time of this turn.
-- **`Stop`** runs when Claude finishes the turn. It reads back that recorded
-  time, works out how long the turn took, and shows the `⏱ … · Claude · …` line.
-
-Both run `scripts/timestamp-hook.js` — plain Node, invoked in *exec form* so the
-plugin path works even when it contains spaces. Per-turn timing is stored in a
-tiny one-file-per-session state file inside the plugin's data directory.
-
 The `/timestamps:log` skill (`scripts/log.js`) reads Claude Code's own
 transcript `.jsonl` for the current project — the same data Claude Code already
-records — and formats it. Nothing is collected, and nothing leaves your machine.
+records, where every message carries an ISO timestamp — validates the path,
+parses it, and formats the timeline. Nothing is collected, and nothing leaves
+your machine.
+
+The optional status-line clock (`extras/statusline.js`) is a small Node script
+Claude Code re-runs on a timer to print the current time.
+
+### A note on "live" per-message timestamps
+
+If you came here hoping for a timestamp stamped onto every message *as it
+happens*: that is **not possible** with Claude Code's current plugin system, and
+no plugin can do it.
+
+- Hooks cannot modify or prepend text to message bubbles — there is no
+  per-message rendering API.
+- Every *visible* hook line is forced through a `⎿ <Event> says: …` wrapper
+  added by Claude Code itself, which no plugin can remove.
+- A `UserPromptSubmit` hook's plain output is, in current versions, not shown to
+  the user at all.
+
+This plugin deliberately does **not** register hooks. It does the part Claude
+Code supports cleanly — an accurate on-demand timeline — instead of shipping
+noisy, half-working live output.
 
 ### Non-interference & safety
 
-This plugin is built to be a quiet, well-behaved citizen of your setup:
+- **No hooks, no background processes.** The plugin registers nothing that runs
+  automatically. It only acts when you invoke `/timestamps:log` (or when Claude
+  Code refreshes the status line, if you opted into it).
+- **It stays in its lane.** The only file it might write is an optional
+  `config.json` *you* create; it reads transcripts read-only.
+- **Path-traversal safe.** Transcript paths are validated to live inside
+  `~/.claude/projects/` before being read.
 
-- **It never blocks a prompt.** Every hook script has a safety contract: a hard
-  timeout, a top-level catch, and an unconditional clean exit. Worst case on any
-  internal error — it prints nothing and gets out of the way.
-- **It's purely additive.** Plugin hooks *merge* with any hooks you already
-  have; they don't replace them. It registers nothing globally and sets no main
-  status line.
-- **It stays in its lane.** The only files it writes are tiny state files in its
-  own data directory, and stale ones are cleaned up automatically.
-- **It's path-traversal safe.** Session ids are sanitised before use as
-  filenames; transcript paths are validated to live inside `~/.claude/projects/`.
-
-### What it does *not* do
-
-Live timestamps mark **prompt** and **turn-completion** boundaries — one line
-when you send, one when Claude finishes. They are not stamped onto every
-individual tool call or sub-message; that boundary set was chosen deliberately
-to stay clean and noise-free rather than spamming a line after every file read.
-
----
-
-## Uninstall / rollback
-
-The plugin is fully reversible and leaves nothing behind:
+## Uninstall
 
 ```
 /plugin disable timestamps      # keep it installed but turn it off
 /plugin uninstall timestamps    # remove it entirely
 ```
 
-Or set `"enabled": false` in `config.json` to silence it without uninstalling.
-Uninstalling also removes the plugin's data directory (its state files and your
-`config.json`).
-
----
+If you added the optional status-line clock, also remove the `statusLine` block
+from `~/.claude/settings.json`.
 
 ## Publishing to GitHub
 
-This repository is ready to publish as-is — the metadata is already wired to
-`github.com/llewellynvz/claude-code-timestamps`. Create that repository on
-GitHub, then from this folder run:
+This repository is its own Claude Code plugin marketplace
+(`.claude-plugin/marketplace.json`), and the metadata is wired to
+`github.com/llewellynvz/claude-code-timestamps`. To publish, create that
+repository on GitHub, then from this folder:
 
 ```bash
-git init
 git add .
-git commit -m "timestamps plugin v1.0.0"
-git branch -M main
-git remote add origin https://github.com/llewellynvz/claude-code-timestamps.git
-git push -u origin main
+git commit -m "your message"
+git push
 ```
 
-(If you use a different repository name, update the `homepage`/`repository`
-fields in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`,
-and the Option A install command above, to match.)
-
-The repository is **its own plugin marketplace** (`.claude-plugin/marketplace.json`),
-so once it's on GitHub the two-command install in [Option A](#option-a--install-from-github-recommended)
-works for anyone — no separate marketplace repo needed.
+(If you use a different repository name or owner, update the
+`homepage`/`repository` fields in `.claude-plugin/plugin.json` and
+`.claude-plugin/marketplace.json`, and the Option A install command above.)
 
 Before pushing, run the checks:
 
 ```bash
-node test/run-tests.js     # 41 checks, must pass clean
+node test/run-tests.js     # must pass clean
 claude plugin validate .   # must report "Validation passed"
 ```
-
----
 
 ## Project layout
 
@@ -303,23 +257,19 @@ claude plugin validate .   # must report "Validation passed"
 .claude-plugin/
   plugin.json          plugin manifest
   marketplace.json     makes this repo its own installable marketplace
-hooks/
-  hooks.json           registers the UserPromptSubmit + Stop hooks
 scripts/
-  timestamp-hook.js    the live hook (handles both events; safety contract)
-  log.js               the /timestamps:log retrospective timeline
+  log.js               the /timestamps:log timeline (the core feature)
   lib/
-    paths.js           resolves a writable data directory
+    paths.js           resolves a directory for the optional config.json
     config.js          loads + defensively validates config.json
-    render.js          all time/date/elapsed/line formatting
-    state.js           per-session prompt-time store (path-traversal safe)
+    render.js          time / date / clock formatting
     transcript.js      locate + validate + parse transcript .jsonl files
 skills/
   log/SKILL.md         the /timestamps:log skill definition
 extras/
   statusline.js        optional, opt-in live status-line clock
 test/
-  run-tests.js         self-contained test suite (41 checks, zero deps)
+  run-tests.js         self-contained test suite (zero deps)
 config.example.json    copy to your data dir as config.json to customise
 ```
 

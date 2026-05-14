@@ -1,25 +1,18 @@
 {
-  "_comment": "Copy this file to your plugin data directory to customise the timestamp lines. See README.md > Configuration for the exact path on your machine and what every field does. Every field is optional; anything you omit falls back to the built-in default shown here.",
-
-  "enabled": true,
+  "_comment": "Copy this file to your plugin data directory as config.json to customise the timeline and the optional status-line clock. See README.md > Configuration for the exact path on your machine and what every field does. Every field is optional; anything you omit falls back to the built-in default shown here.",
 
   "timeFormat": "24h",
   "showSeconds": true,
 
-  "dateMode": "always",
-  "dateOnStopLine": false,
+  "labels": {
+    "user": "auto",
+    "assistant": "Claude"
+  },
 
-  "showElapsed": true,
+  "dateHeaders": true,
+  "previewLength": 200,
+  "includeToolCalls": false,
 
   "prefix": "⏱",
-  "separator": " · ",
-  "indent": 0,
-  "gapBeforePrompt": 1,
-  "gapBeforeStop": 0,
-  "color": false,
-
-  "labels": {
-    "user": "you",
-    "assistant": "Claude"
-  }
+  "statuslineShowDate": true
 }

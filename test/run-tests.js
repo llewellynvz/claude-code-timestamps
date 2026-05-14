@@ -1,19 +1,18 @@
 'use strict';
 
 /**
- * run-tests.js — self-contained test harness for the timestamps plugin.
+ * run-tests.js — self-contained test harness for the timestamps plugin (v2.0.0).
  *
  * Pure Node, zero dependencies. Run with:  node test/run-tests.js
  *
  * Covers:
- *   - config.js   defaults + defensive normalization of bad input
- *   - render.js   time / date / elapsed / gap formatting
- *   - state.js    session-id sanitization (path-traversal), roundtrip, cleanup
- *   - transcript.js  project-key transform + path validation guard
- *   - timestamp-hook.js  the SAFETY CONTRACT — always exit 0, never hang,
- *                        across valid / malformed / empty / hostile input,
- *                        invoked through a path that contains spaces
- *   - log.js      runs against a real transcript fixture
+ *   - config.js     defaults + defensive normalization + resolveUserLabel
+ *   - render.js     time / clock / date formatting
+ *   - transcript.js project-key transform, path-validation guard, JSONL parsing
+ *   - log.js        end-to-end against a real fixture transcript: the
+ *                   "[HH:MM:SS] Name:" timeline format, the no-transcript path,
+ *                   and invocation through a path that contains spaces
+ *   - statusline.js runs cleanly and emits a time string
  *   - JSON validity of every shipped manifest
  *
  * Exit code is 0 only if every assertion passes.
@@ -26,10 +25,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const PLUGIN_ROOT = path.join(__dirname, '..');
-const HOOK = path.join(PLUGIN_ROOT, 'scripts', 'timestamp-hook.js');
 const LOG = path.join(PLUGIN_ROOT, 'scripts', 'log.js');
-
-// Isolated, disposable data dir so tests never touch real plugin state.
+const STATUSLINE = path.join(PLUGIN_ROOT, 'extras', 'statusline.js');
 const WORK = path.join(__dirname, '.work');
 
 let passed = 0;
@@ -62,28 +59,8 @@ function freshWorkDir() {
   return WORK;
 }
 
-/** Run the hook script with a given event + stdin, return {status, stdout, stderr}. */
-function runHook(event, stdinObj, opts) {
-  opts = opts || {};
-  const input =
-    stdinObj === undefined
-      ? ''
-      : typeof stdinObj === 'string'
-      ? stdinObj
-      : JSON.stringify(stdinObj);
-  const res = spawnSync(process.execPath, [HOOK, event], {
-    input,
-    encoding: 'utf8',
-    timeout: 8000,
-    env: Object.assign({}, process.env, {
-      CLAUDE_PLUGIN_DATA: opts.dataDir || WORK,
-    }),
-  });
-  return res;
-}
-
 // ──────────────────────────────────────────────────────────────────────────
-console.log('timestamps plugin — test suite');
+console.log('timestamps plugin — test suite (v2.0.0)');
 console.log('plugin root: ' + PLUGIN_ROOT);
 freshWorkDir();
 
@@ -93,14 +70,13 @@ const config = require(path.join(PLUGIN_ROOT, 'scripts', 'lib', 'config'));
 
 test('defaults load when no file exists', function () {
   const cfg = config.load(path.join(WORK, 'does-not-exist.json'));
-  assert.strictEqual(cfg.enabled, true);
   assert.strictEqual(cfg.timeFormat, '24h');
   assert.strictEqual(cfg.showSeconds, true);
-  assert.strictEqual(cfg.dateMode, 'always');
-  assert.strictEqual(cfg.gapBeforePrompt, 1);
-  assert.strictEqual(cfg.gapBeforeStop, 0);
-  assert.strictEqual(cfg.labels.user, 'you');
+  assert.strictEqual(cfg.labels.user, 'auto');
   assert.strictEqual(cfg.labels.assistant, 'Claude');
+  assert.strictEqual(cfg.dateHeaders, true);
+  assert.strictEqual(cfg.previewLength, 200);
+  assert.strictEqual(cfg.includeToolCalls, false);
 });
 
 test('malformed JSON config falls back to defaults (no throw)', function () {
@@ -117,11 +93,8 @@ test('out-of-range / wrong-type values are clamped or rejected', function () {
     JSON.stringify({
       timeFormat: 'banana',
       showSeconds: 'yes',
-      gapBeforePrompt: 999,
-      gapBeforeStop: -4,
-      indent: 'x',
-      dateMode: 'sometimes',
-      prefix: 12345,
+      previewLength: 999999,
+      dateHeaders: 'maybe',
       labels: { user: '', assistant: 'AI' },
     }),
     'utf8'
@@ -129,12 +102,9 @@ test('out-of-range / wrong-type values are clamped or rejected', function () {
   const cfg = config.load(f);
   assert.strictEqual(cfg.timeFormat, '24h', 'invalid timeFormat -> default');
   assert.strictEqual(cfg.showSeconds, true, 'non-boolean -> default');
-  assert.strictEqual(cfg.gapBeforePrompt, 5, 'clamped to max 5');
-  assert.strictEqual(cfg.gapBeforeStop, 0, 'clamped to min 0');
-  assert.strictEqual(cfg.indent, 0, 'non-number -> default');
-  assert.strictEqual(cfg.dateMode, 'always', 'invalid dateMode -> default');
-  assert.strictEqual(cfg.prefix, String.fromCharCode(0x23f1), 'non-string prefix -> default');
-  assert.strictEqual(cfg.labels.user, 'you', 'empty label -> default');
+  assert.strictEqual(cfg.previewLength, 2000, 'clamped to max 2000');
+  assert.strictEqual(cfg.dateHeaders, true, 'non-boolean -> default');
+  assert.strictEqual(cfg.labels.user, 'auto', 'empty label -> default');
   assert.strictEqual(cfg.labels.assistant, 'AI', 'valid label override kept');
 });
 
@@ -142,13 +112,34 @@ test('valid config overrides are honoured', function () {
   const f = path.join(WORK, 'good.json');
   fs.writeFileSync(
     f,
-    JSON.stringify({ timeFormat: '12h', showSeconds: false, enabled: false }),
+    JSON.stringify({
+      timeFormat: '12h',
+      showSeconds: false,
+      previewLength: 50,
+      includeToolCalls: true,
+      labels: { user: 'Llewellyn' },
+    }),
     'utf8'
   );
   const cfg = config.load(f);
   assert.strictEqual(cfg.timeFormat, '12h');
   assert.strictEqual(cfg.showSeconds, false);
-  assert.strictEqual(cfg.enabled, false);
+  assert.strictEqual(cfg.previewLength, 50);
+  assert.strictEqual(cfg.includeToolCalls, true);
+  assert.strictEqual(cfg.labels.user, 'Llewellyn');
+});
+
+test('resolveUserLabel: explicit string is used verbatim', function () {
+  const cfg = config.normalize({ labels: { user: 'Llewellyn' } });
+  assert.strictEqual(config.resolveUserLabel(cfg), 'Llewellyn');
+});
+
+test('resolveUserLabel: "auto" resolves to a non-empty name', function () {
+  const cfg = config.normalize(null); // default labels.user === "auto"
+  const label = config.resolveUserLabel(cfg);
+  assert.strictEqual(typeof label, 'string');
+  assert.ok(label.length > 0, 'auto must resolve to something non-empty');
+  assert.notStrictEqual(label, 'auto', 'auto must be resolved, not passed through');
 });
 
 // ── render.js ─────────────────────────────────────────────────────────────
@@ -184,167 +175,18 @@ test('formatTime 12h am/pm', function () {
   );
 });
 
+test('formatClock wraps the time in brackets', function () {
+  const d = new Date(2026, 4, 14, 14, 51, 52);
+  assert.strictEqual(
+    render.formatClock(d, { timeFormat: '24h', showSeconds: true }),
+    '[14:51:52]'
+  );
+});
+
 test('formatDate is fixed and locale-independent', function () {
   // 2026-05-14 is a Thursday.
   const d = new Date(2026, 4, 14, 0, 0, 0);
   assert.strictEqual(render.formatDate(d), 'Thu 14 May 2026');
-});
-
-test('formatElapsed across ranges', function () {
-  assert.strictEqual(render.formatElapsed(0), '0s');
-  assert.strictEqual(render.formatElapsed(42000), '42s');
-  assert.strictEqual(render.formatElapsed(105000), '1m 45s');
-  assert.strictEqual(render.formatElapsed(3700000), '1h 1m');
-  assert.strictEqual(render.formatElapsed(-1), null);
-  assert.strictEqual(render.formatElapsed(undefined), null);
-  assert.strictEqual(render.formatElapsed(NaN), null);
-});
-
-test('buildLine: prompt line has gap, time, date, label', function () {
-  const cfg = config.normalize(null);
-  const d = new Date(2026, 4, 14, 14, 23, 1);
-  const line = render.buildLine({ event: 'prompt', date: d, cfg: cfg });
-  assert.ok(line.startsWith('\n'), 'gapBeforePrompt=1 -> leading newline');
-  assert.ok(line.indexOf('14:23:01') !== -1, 'has time with seconds');
-  assert.ok(line.indexOf('Thu 14 May 2026') !== -1, 'has date');
-  assert.ok(line.indexOf('you') !== -1, 'has user label');
-});
-
-test('buildLine: stop line has no gap by default, shows elapsed', function () {
-  const cfg = config.normalize(null);
-  const d = new Date(2026, 4, 14, 14, 23, 47);
-  const line = render.buildLine({
-    event: 'stop',
-    date: d,
-    elapsedMs: 46000,
-    cfg: cfg,
-  });
-  assert.ok(!line.startsWith('\n'), 'gapBeforeStop=0 -> no leading newline');
-  assert.ok(line.indexOf('14:23:47') !== -1, 'has time');
-  assert.ok(line.indexOf('Claude') !== -1, 'has assistant label');
-  assert.ok(line.indexOf('46s') !== -1, 'has elapsed');
-  assert.ok(line.indexOf('May 2026') === -1, 'no date on stop line by default');
-});
-
-test('buildCore: prefix is space-attached, not a separator-joined field', function () {
-  // Regression guard: output must read "⏱ 14:23:01 · …", never "⏱ · 14:23:01".
-  const cfg = config.normalize(null); // default prefix "⏱", separator " · "
-  const d = new Date(2026, 4, 14, 14, 23, 1);
-  const core = render.buildCore({ event: 'prompt', date: d, cfg: cfg });
-  assert.strictEqual(
-    core.indexOf(cfg.prefix + ' ' + '14:23:01'),
-    0,
-    'core must start with "<prefix> <time>": got ' + JSON.stringify(core)
-  );
-  assert.strictEqual(
-    core.indexOf(cfg.prefix + cfg.separator),
-    -1,
-    'prefix must NOT be followed by the separator'
-  );
-});
-
-test('buildCore: custom prefix is space-attached too', function () {
-  const cfg = config.normalize({ prefix: '>>' });
-  const core = render.buildCore({
-    event: 'prompt',
-    date: new Date(2026, 4, 14, 9, 0, 0),
-    cfg: cfg,
-  });
-  assert.strictEqual(core.indexOf('>> 09:00:00'), 0);
-});
-
-test('buildCore: empty prefix => line starts directly with the time', function () {
-  const cfg = config.normalize({ prefix: '' });
-  const core = render.buildCore({
-    event: 'prompt',
-    date: new Date(2026, 4, 14, 9, 0, 0),
-    cfg: cfg,
-  });
-  assert.strictEqual(core.indexOf('09:00:00'), 0, 'no prefix => starts with time');
-});
-
-test('buildLine: color off => no ANSI escape bytes', function () {
-  const cfg = config.normalize({ color: false });
-  const line = render.buildLine({
-    event: 'prompt',
-    date: new Date(),
-    cfg: cfg,
-  });
-  assert.strictEqual(line.indexOf(String.fromCharCode(27)), -1);
-});
-
-test('buildLine: color on => wrapped in ANSI', function () {
-  const cfg = config.normalize({ color: true });
-  const line = render.buildLine({
-    event: 'prompt',
-    date: new Date(),
-    cfg: cfg,
-  });
-  assert.ok(line.indexOf(String.fromCharCode(27)) !== -1);
-});
-
-// ── state.js ──────────────────────────────────────────────────────────────
-section('state.js');
-process.env.CLAUDE_PLUGIN_DATA = WORK; // point state.js at the work dir
-const state = require(path.join(PLUGIN_ROOT, 'scripts', 'lib', 'state'));
-
-test('sanitizeSessionId neutralises path traversal', function () {
-  assert.strictEqual(state.sanitizeSessionId('../../etc/passwd'), '------etc-passwd');
-  assert.strictEqual(state.sanitizeSessionId('a/b\\c'), 'a-b-c');
-  assert.strictEqual(state.sanitizeSessionId(''), 'unknown');
-  assert.strictEqual(state.sanitizeSessionId(null), 'unknown');
-  assert.strictEqual(state.sanitizeSessionId('///'), 'unknown');
-  assert.strictEqual(state.sanitizeSessionId('Good_Session-123'), 'Good_Session-123');
-});
-
-test('statePath of a hostile id never escapes the state dir', function () {
-  const p = state.statePath('../../../../tmp/evil');
-  const stateRoot = path.join(WORK, 'state');
-  assert.ok(
-    path.resolve(p).startsWith(path.resolve(stateRoot) + path.sep),
-    'resolved path ' + p + ' must stay inside ' + stateRoot
-  );
-});
-
-test('recordPrompt -> readPrompt -> clearPrompt roundtrip', function () {
-  const sid = 'roundtrip-session';
-  const t = new Date(Date.now() - 5000);
-  assert.strictEqual(state.recordPrompt(sid, t), true);
-  const got = state.readPrompt(sid);
-  assert.ok(got && Math.abs(got.promptTime - t.getTime()) < 2);
-  state.clearPrompt(sid);
-  assert.strictEqual(state.readPrompt(sid), null, 'cleared');
-});
-
-test('readPrompt of unknown session is null (no throw)', function () {
-  assert.strictEqual(state.readPrompt('never-existed'), null);
-});
-
-test('concurrent sessions get independent state files', function () {
-  state.recordPrompt('session-A', new Date());
-  state.recordPrompt('session-B', new Date());
-  assert.ok(state.readPrompt('session-A'), 'A present');
-  assert.ok(state.readPrompt('session-B'), 'B present');
-  state.clearPrompt('session-A');
-  assert.ok(!state.readPrompt('session-A'), 'A cleared');
-  assert.ok(state.readPrompt('session-B'), 'B untouched by A clear');
-  state.clearPrompt('session-B');
-});
-
-test('cleanupStale removes old files, keeps fresh ones', function () {
-  const stateRoot = path.join(WORK, 'state');
-  fs.mkdirSync(stateRoot, { recursive: true });
-  const oldFile = path.join(stateRoot, 'old.json');
-  const freshFile = path.join(stateRoot, 'fresh.json');
-  fs.writeFileSync(oldFile, '{"promptTime":1}', 'utf8');
-  fs.writeFileSync(freshFile, '{"promptTime":1}', 'utf8');
-  // Backdate the old file 30 days.
-  const old = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  fs.utimesSync(oldFile, new Date(old), new Date(old));
-  state.cleanupStale();
-  assert.ok(!fs.existsSync(oldFile), 'stale file removed');
-  assert.ok(fs.existsSync(freshFile), 'fresh file kept');
-  fs.unlinkSync(freshFile);
 });
 
 // ── transcript.js ─────────────────────────────────────────────────────────
@@ -362,11 +204,11 @@ test('projectKey transform matches Claude Code convention', function () {
 test('validateTranscriptPath rejects paths outside ~/.claude/projects', function () {
   let threw = false;
   try {
-    transcript.validateTranscriptPath(path.join(os.tmpdir()));
+    transcript.validateTranscriptPath(os.tmpdir());
   } catch (_) {
     threw = true;
   }
-  assert.ok(threw, 'must reject a non-transcript path');
+  assert.ok(threw, 'must reject a path outside ~/.claude/projects/');
 });
 
 test('validateTranscriptPath rejects a non-.jsonl file', function () {
@@ -379,207 +221,186 @@ test('validateTranscriptPath rejects a non-.jsonl file', function () {
   assert.ok(threw);
 });
 
-test('readMessages parses a JSONL fixture, skips junk', async function () {
-  const fixture = path.join(WORK, 'fixture.jsonl');
-  const lines = [
-    JSON.stringify({
-      type: 'user',
-      timestamp: '2026-05-14T12:00:01.000Z',
-      message: { content: 'Hello there' },
-    }),
-    'this is not json — must be skipped',
-    JSON.stringify({
-      type: 'assistant',
-      timestamp: '2026-05-14T12:00:05.000Z',
-      message: { content: [{ type: 'text', text: 'Hi! How can I help?' }] },
-    }),
-    JSON.stringify({
-      type: 'assistant',
-      timestamp: '2026-05-14T12:00:06.000Z',
+// A fixture exercising every entry kind: a user message, junk, a text reply,
+// a tool-only assistant entry, an assistant entry with BOTH a tool call and
+// text, and an unrelated system entry.
+const MIXED_FIXTURE = [
+  JSON.stringify({
+    type: 'user',
+    timestamp: '2026-05-14T12:00:01.000Z',
+    message: { content: 'Hello there' },
+  }),
+  'this is not json — must be skipped',
+  JSON.stringify({
+    type: 'assistant',
+    timestamp: '2026-05-14T12:00:05.000Z',
+    message: { content: [{ type: 'text', text: 'Hi! How can I help?' }] },
+  }),
+  JSON.stringify({
+    type: 'assistant',
+    timestamp: '2026-05-14T12:00:06.000Z',
+    message: { content: [{ type: 'tool_use', name: 'Read' }] },
+  }),
+  JSON.stringify({
+    type: 'assistant',
+    timestamp: '2026-05-14T12:00:07.000Z',
+    message: {
+      content: [
+        { type: 'tool_use', name: 'Bash' },
+        { type: 'text', text: 'Running that now.' },
+      ],
+    },
+  }),
+  JSON.stringify({ type: 'system', message: { content: 'ignored' } }),
+  '',
+].join('\n');
+
+test('extractPreview classifies text / tool / empty correctly', function () {
+  assert.strictEqual(
+    transcript.extractPreview({ message: { content: 'hi' } }).kind,
+    'text'
+  );
+  assert.strictEqual(
+    transcript.extractPreview({
       message: { content: [{ type: 'tool_use', name: 'Read' }] },
-    }),
-    JSON.stringify({ type: 'system', message: { content: 'ignored' } }),
-    '',
-  ];
-  fs.writeFileSync(fixture, lines.join('\n'), 'utf8');
+    }).kind,
+    'tool'
+  );
+  // Text wins even when a tool_use block comes first.
+  const both = transcript.extractPreview({
+    message: {
+      content: [
+        { type: 'tool_use', name: 'Bash' },
+        { type: 'text', text: 'done' },
+      ],
+    },
+  });
+  assert.strictEqual(both.kind, 'text');
+  assert.strictEqual(both.preview, 'done');
+  assert.strictEqual(
+    transcript.extractPreview({ message: { content: [] } }).kind,
+    'empty'
+  );
+});
+
+test('readMessages: tool-only entries are skipped by default', async function () {
+  const fixture = path.join(WORK, 'mixed.jsonl');
+  fs.writeFileSync(fixture, MIXED_FIXTURE, 'utf8');
   const msgs = await transcript.readMessages(fixture);
-  assert.strictEqual(msgs.length, 3, 'user + text assistant + tool_use assistant');
-  assert.strictEqual(msgs[0].role, 'user');
+  // user + "Hi!" + "Running that now." — the tool-ONLY entry is dropped.
+  assert.strictEqual(msgs.length, 3, 'tool-only entry filtered out');
   assert.strictEqual(msgs[0].preview, 'Hello there');
+  assert.strictEqual(msgs[1].preview, 'Hi! How can I help?');
+  assert.strictEqual(msgs[2].preview, 'Running that now.', 'tool+text kept as text');
+  for (const m of msgs) {
+    assert.ok(m.preview.indexOf('[tool:') === -1, 'no tool markers in default view');
+  }
+});
+
+test('readMessages: includeToolCalls=true keeps tool-only entries', async function () {
+  const fixture = path.join(WORK, 'mixed2.jsonl');
+  fs.writeFileSync(fixture, MIXED_FIXTURE, 'utf8');
+  const msgs = await transcript.readMessages(fixture, 200, true);
+  assert.strictEqual(msgs.length, 4, 'tool-only entry now included');
   assert.strictEqual(msgs[2].preview, '[tool: Read]');
 });
 
-// ── timestamp-hook.js — THE SAFETY CONTRACT ───────────────────────────────
-section('timestamp-hook.js — safety contract (always exit 0, never hang)');
-
-test('prompt: valid input -> exit 0, prints a timestamp line, writes state', function () {
-  freshWorkDir();
-  const sid = 'hook-prompt-session';
-  const res = runHook('prompt', {
-    session_id: sid,
-    hook_event_name: 'UserPromptSubmit',
-    cwd: PLUGIN_ROOT,
-    prompt: 'hello',
-  });
-  assert.strictEqual(res.status, 0, 'exit 0');
-  assert.ok(/\d\d:\d\d:\d\d/.test(res.stdout), 'stdout has HH:MM:SS');
-  assert.ok(res.stdout.indexOf('you') !== -1, 'stdout has user label');
-  const stateFile = path.join(WORK, 'state', sid + '.json');
-  assert.ok(fs.existsSync(stateFile), 'state file written for the session');
-});
-
-test('stop: with prior prompt state -> exit 0, JSON systemMessage incl. elapsed', function () {
-  // freshWorkDir already done above; seed an older prompt time by hand.
-  const sid = 'hook-stop-session';
-  const stateRoot = path.join(WORK, 'state');
-  fs.mkdirSync(stateRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(stateRoot, sid + '.json'),
-    JSON.stringify({ promptTime: Date.now() - 7000 }),
-    'utf8'
-  );
-  const res = runHook('stop', { session_id: sid, hook_event_name: 'Stop' });
-  assert.strictEqual(res.status, 0, 'exit 0');
-  const parsed = JSON.parse(res.stdout);
-  assert.ok(typeof parsed.systemMessage === 'string', 'stdout is JSON w/ systemMessage');
-  assert.ok(parsed.systemMessage.indexOf('Claude') !== -1, 'mentions Claude');
-  assert.ok(/\ds\b/.test(parsed.systemMessage), 'shows elapsed seconds');
-  assert.ok(
-    !fs.existsSync(path.join(stateRoot, sid + '.json')),
-    'stop consumes (deletes) the state file'
-  );
-});
-
-test('stop: with NO prior state -> exit 0, valid JSON, no crash', function () {
-  const res = runHook('stop', { session_id: 'no-state-session' });
-  assert.strictEqual(res.status, 0);
-  const parsed = JSON.parse(res.stdout);
-  assert.ok(typeof parsed.systemMessage === 'string');
-  assert.ok(parsed.systemMessage.indexOf('Claude') !== -1);
-});
-
-test('prompt: malformed JSON on stdin -> exit 0 (does not block the prompt)', function () {
-  const res = runHook('prompt', '{ broken json :::');
-  assert.strictEqual(res.status, 0);
-});
-
-test('prompt: empty stdin -> exit 0', function () {
-  const res = runHook('prompt', '');
-  assert.strictEqual(res.status, 0);
-});
-
-test('prompt: missing session_id -> exit 0, falls back to "unknown"', function () {
-  freshWorkDir();
-  const res = runHook('prompt', { hook_event_name: 'UserPromptSubmit' });
-  assert.strictEqual(res.status, 0);
-  assert.ok(fs.existsSync(path.join(WORK, 'state', 'unknown.json')));
-});
-
-test('hostile session_id -> exit 0, no file escapes the state dir', function () {
-  freshWorkDir();
-  const res = runHook('prompt', { session_id: '../../../../pwned' });
-  assert.strictEqual(res.status, 0);
-  // Nothing should exist outside WORK/state.
-  const escaped = path.join(PLUGIN_ROOT, '..', '..', '..', 'pwned.json');
-  assert.ok(!fs.existsSync(escaped), 'no traversal file created');
-  const files = fs.readdirSync(path.join(WORK, 'state'));
-  assert.strictEqual(files.length, 1, 'exactly one sanitized state file');
-});
-
-test('unknown event arg -> exit 0, prints nothing', function () {
-  const res = runHook('banana', { session_id: 'x' });
-  assert.strictEqual(res.status, 0);
-  assert.strictEqual(res.stdout.trim(), '');
-});
-
-test('no event arg at all -> exit 0', function () {
-  const res = spawnSync(process.execPath, [HOOK], {
-    input: '{}',
-    encoding: 'utf8',
-    timeout: 8000,
-    env: Object.assign({}, process.env, { CLAUDE_PLUGIN_DATA: WORK }),
-  });
-  assert.strictEqual(res.status, 0);
-});
-
-test('disabled via config -> exit 0, prints nothing', function () {
-  const dir = path.join(WORK, 'disabled');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
-    path.join(dir, 'config.json'),
-    JSON.stringify({ enabled: false }),
-    'utf8'
-  );
-  const res = runHook('prompt', { session_id: 'x' }, { dataDir: dir });
-  assert.strictEqual(res.status, 0);
-  assert.strictEqual(res.stdout.trim(), '', 'no output when disabled');
-});
-
-test('hook invoked via a path containing spaces works (Windows reality)', function () {
-  // HOOK itself lives under "...\\CLAUDE TIMESTAPS\\..." — a path with spaces.
-  // spawnSync passes argv as an array (exec form), so this proves the exec-form
-  // hook command in hooks.json resolves correctly on a spaced install path.
-  assert.ok(HOOK.indexOf(' ') !== -1, 'precondition: plugin path has a space');
-  const res = runHook('prompt', { session_id: 'spaced-path-session' });
-  assert.strictEqual(res.status, 0);
-  assert.ok(/\d\d:\d\d:\d\d/.test(res.stdout));
-});
-
-test('hook completes quickly (well under the 5s hook timeout)', function () {
-  const start = Date.now();
-  const res = runHook('prompt', { session_id: 'speed' });
-  const elapsed = Date.now() - start;
-  assert.strictEqual(res.status, 0);
-  assert.ok(elapsed < 4000, 'completed in ' + elapsed + 'ms (< 4000ms)');
-});
-
-// ── log.js ────────────────────────────────────────────────────────────────
-section('log.js — retrospective timeline');
-
-test('log.js runs against a transcript fixture -> exit 0, produces a timeline', function () {
-  // Build a fake ~/.claude/projects/<key>/<file>.jsonl under the work dir and
-  // point log.js at it explicitly (explicit-path arg bypasses cwd lookup, but
-  // still goes through validateTranscriptPath — so we must place it for real).
-  // Simplest robust check: pass the fixture path explicitly and assert the
-  // validator + parser + renderer all run and exit 0.
-  const fixture = path.join(WORK, 'log-fixture.jsonl');
+test('readMessages respects the previewLength argument', async function () {
+  const fixture = path.join(WORK, 'long.jsonl');
+  const longText = 'x'.repeat(500);
   fs.writeFileSync(
     fixture,
+    JSON.stringify({
+      type: 'user',
+      timestamp: '2026-05-14T12:00:01.000Z',
+      message: { content: longText },
+    }),
+    'utf8'
+  );
+  const msgs = await transcript.readMessages(fixture, 40);
+  assert.ok(msgs[0].preview.length <= 40, 'preview trimmed to <= 40 chars');
+  assert.ok(msgs[0].preview.endsWith('...'), 'trimmed preview ends with ...');
+});
+
+// ── log.js — end-to-end against a real fixture transcript ─────────────────
+section('log.js — the /timestamps:log timeline');
+
+// log.js + validateTranscriptPath require the transcript to live inside
+// ~/.claude/projects/. Create a throwaway project dir there for the test.
+const PROJECTS_ROOT = path.join(os.homedir(), '.claude', 'projects');
+const FIXTURE_PROJECT = path.join(PROJECTS_ROOT, '__timestamps-selftest-' + process.pid);
+const FIXTURE_TRANSCRIPT = path.join(FIXTURE_PROJECT, 'selftest.jsonl');
+
+function withFixtureTranscript(run) {
+  fs.mkdirSync(FIXTURE_PROJECT, { recursive: true });
+  fs.writeFileSync(
+    FIXTURE_TRANSCRIPT,
     [
       JSON.stringify({
         type: 'user',
         timestamp: '2026-05-14T09:00:00.000Z',
-        message: { content: 'First question' },
+        message: { content: 'what is the time?' },
       }),
       JSON.stringify({
         type: 'assistant',
         timestamp: '2026-05-14T09:00:04.000Z',
-        message: { content: [{ type: 'text', text: 'First answer' }] },
+        message: { content: [{ type: 'text', text: 'It is 9am.' }] },
       }),
     ].join('\n'),
     'utf8'
   );
-  const res = spawnSync(process.execPath, [LOG, '10', fixture], {
+  try {
+    return run();
+  } finally {
+    try {
+      fs.rmSync(FIXTURE_PROJECT, { recursive: true, force: true });
+    } catch (_) {}
+  }
+}
+
+function runLog(args, opts) {
+  return spawnSync(process.execPath, [LOG].concat(args || []), {
     encoding: 'utf8',
     timeout: 8000,
-    cwd: PLUGIN_ROOT,
+    cwd: (opts && opts.cwd) || PLUGIN_ROOT,
   });
-  assert.strictEqual(res.status, 0, 'log.js exits 0');
-  // The fixture is outside ~/.claude/projects, so the validator will reject it
-  // — log.js must report that cleanly (not crash). That is the contract here.
-  assert.ok(
-    res.stdout.indexOf('Cannot read transcript') !== -1 ||
-      res.stdout.indexOf('--- Message Timeline ---') !== -1,
-    'log.js produced a clean, expected message'
-  );
+}
+
+test('log.js renders the "[HH:MM:SS] Name:" timeline from a real transcript', function () {
+  withFixtureTranscript(function () {
+    const res = runLog(['10', FIXTURE_TRANSCRIPT]);
+    assert.strictEqual(res.status, 0, 'log.js exits 0');
+    const o = res.stdout;
+    assert.ok(o.indexOf('--- Message Timeline ---') !== -1, 'has the header');
+    assert.ok(/\[\d\d:\d\d:\d\d\]/.test(o), 'has a [HH:MM:SS] clock');
+    assert.ok(/\[\d\d:\d\d:\d\d\] .+:/.test(o), 'has a "[clock] Name:" header line');
+    assert.ok(o.indexOf('what is the time?') !== -1, 'shows the user message text');
+    assert.ok(o.indexOf('It is 9am.') !== -1, 'shows the assistant message text');
+    assert.ok(o.indexOf('Claude:') !== -1, 'assistant labelled "Claude"');
+    assert.ok(o.indexOf('2026') !== -1, 'has a date header with the year');
+    assert.ok(o.indexOf('Showing 2 of 2 messages.') !== -1, 'has the count footer');
+  });
+});
+
+test('log.js puts the message text on its own line under the header', function () {
+  withFixtureTranscript(function () {
+    const res = runLog(['10', FIXTURE_TRANSCRIPT]);
+    // The line after a "[clock] Name:" header is the message text itself.
+    const lines = res.stdout.split('\n');
+    let found = false;
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (/^\[\d\d:\d\d:\d\d\] .+:$/.test(lines[i]) &&
+          lines[i + 1] === 'what is the time?') {
+        found = true;
+        break;
+      }
+    }
+    assert.ok(found, 'message text appears on the line below its header');
+  });
 });
 
 test('log.js with no transcript anywhere -> exit 0, clean "not found" message', function () {
-  const res = spawnSync(process.execPath, [LOG], {
-    encoding: 'utf8',
-    timeout: 8000,
-    cwd: os.tmpdir(), // a dir with no Claude Code session
-  });
+  const res = runLog([], { cwd: os.tmpdir() });
   assert.strictEqual(res.status, 0);
   assert.ok(
     res.stdout.indexOf('No transcript found') !== -1,
@@ -587,16 +408,59 @@ test('log.js with no transcript anywhere -> exit 0, clean "not found" message', 
   );
 });
 
+test('log.js rejects a transcript path outside ~/.claude/projects -> clean message', function () {
+  const outside = path.join(WORK, 'outside.jsonl');
+  fs.writeFileSync(outside, '{}', 'utf8');
+  const res = runLog(['10', outside]);
+  assert.strictEqual(res.status, 0);
+  assert.ok(
+    res.stdout.indexOf('Cannot read transcript') !== -1,
+    'rejects the out-of-bounds path cleanly, no crash'
+  );
+});
+
+test('log.js works invoked through a path containing spaces (Windows reality)', function () {
+  // LOG itself lives under "...\\CLAUDE TIMESTAPS\\..." — a path with a space.
+  assert.ok(LOG.indexOf(' ') !== -1, 'precondition: plugin path has a space');
+  withFixtureTranscript(function () {
+    const res = runLog(['5', FIXTURE_TRANSCRIPT]);
+    assert.strictEqual(res.status, 0);
+    assert.ok(/\[\d\d:\d\d:\d\d\]/.test(res.stdout));
+  });
+});
+
+// ── statusline.js ─────────────────────────────────────────────────────────
+section('extras/statusline.js');
+
+test('statusline.js runs, exits 0, emits a time string', function () {
+  const res = spawnSync(process.execPath, [STATUSLINE], {
+    input: JSON.stringify({ model: 'claude-opus-4-7', cwd: PLUGIN_ROOT }),
+    encoding: 'utf8',
+    timeout: 8000,
+  });
+  assert.strictEqual(res.status, 0, 'statusline exits 0');
+  assert.ok(/\d\d:\d\d/.test(res.stdout), 'output contains a HH:MM time');
+});
+
+test('statusline.js survives empty stdin -> exit 0', function () {
+  const res = spawnSync(process.execPath, [STATUSLINE], {
+    input: '',
+    encoding: 'utf8',
+    timeout: 8000,
+  });
+  assert.strictEqual(res.status, 0);
+});
+
 // ── manifest JSON validity ────────────────────────────────────────────────
 section('shipped manifests are valid JSON with required fields');
 
-test('.claude-plugin/plugin.json is valid and has a kebab-case name', function () {
+test('.claude-plugin/plugin.json is valid, kebab-case name, version 2.0.0', function () {
   const p = JSON.parse(
     fs.readFileSync(path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8')
   );
-  assert.strictEqual(typeof p.name, 'string');
   assert.ok(/^[a-z0-9-]+$/.test(p.name), 'name is kebab-case: ' + p.name);
   assert.strictEqual(p.name, 'timestamps');
+  assert.strictEqual(p.version, '2.0.0');
 });
 
 test('.claude-plugin/marketplace.json is valid with name/owner/plugins', function () {
@@ -613,35 +477,25 @@ test('.claude-plugin/marketplace.json is valid with name/owner/plugins', functio
   assert.strictEqual(m.plugins[0].source, './');
 });
 
-test('hooks/hooks.json is valid and registers UserPromptSubmit + Stop', function () {
-  const h = JSON.parse(
-    fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8')
-  );
-  assert.ok(h.hooks, 'has hooks key');
-  assert.ok(Array.isArray(h.hooks.UserPromptSubmit), 'UserPromptSubmit array');
-  assert.ok(Array.isArray(h.hooks.Stop), 'Stop array');
-  const up = h.hooks.UserPromptSubmit[0].hooks[0];
-  assert.strictEqual(up.type, 'command');
-  assert.strictEqual(up.command, 'node');
+test('the plugin ships NO hooks (v2.0.0 removed them)', function () {
   assert.ok(
-    up.args[0].indexOf('${CLAUDE_PLUGIN_ROOT}') === 0,
-    'uses ${CLAUDE_PLUGIN_ROOT} (exec form, space-safe)'
+    !fs.existsSync(path.join(PLUGIN_ROOT, 'hooks')),
+    'hooks/ directory must not exist'
   );
-  assert.strictEqual(up.args[1], 'prompt');
-  assert.strictEqual(up.timeout, 5);
-  const sp = h.hooks.Stop[0].hooks[0];
-  assert.strictEqual(sp.args[1], 'stop');
+  const p = JSON.parse(
+    fs.readFileSync(path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8')
+  );
+  assert.strictEqual(p.hooks, undefined, 'plugin.json declares no inline hooks');
 });
 
-test('config.example.json is valid JSON', function () {
+test('config.example.json is valid JSON and normalizes cleanly', function () {
   const c = JSON.parse(
     fs.readFileSync(path.join(PLUGIN_ROOT, 'config.example.json'), 'utf8')
   );
-  // Strip the leading comment key, then it must normalize cleanly.
   delete c._comment;
   const norm = config.normalize(c);
   assert.strictEqual(norm.timeFormat, '24h');
-  assert.strictEqual(norm.enabled, true);
+  assert.strictEqual(norm.previewLength, 200);
 });
 
 // ── summary ───────────────────────────────────────────────────────────────
@@ -650,7 +504,6 @@ console.log('──────────────────────�
 console.log('  ' + passed + ' passed, ' + failed + ' failed');
 console.log('────────────────────────────────────────');
 
-// Best-effort cleanup of the work dir.
 try {
   fs.rmSync(WORK, { recursive: true, force: true });
 } catch (_) {}
